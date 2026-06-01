@@ -95,3 +95,56 @@ func (s *OrderService) ListByDistributor(distributorID uint, page, pageSize int)
 
 	return orders, total, nil
 }
+
+func (s *OrderService) RefundOrder(ctx context.Context, orderNo string) (*models.Order, error) {
+	order, err := s.GetByOrderNo(orderNo)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, errors.New("订单不存在")
+		}
+		return nil, err
+	}
+
+	if order.Status == models.OrderStatusRefunded {
+		return order, nil
+	}
+
+	if order.Status != models.OrderStatusCompleted {
+		return nil, errors.New("只有已完成状态的订单可以退款")
+	}
+
+	locked, err := s.idempotentService.AcquireRefundLock(ctx, orderNo)
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		var existingOrder models.Order
+		if err := database.DB.Where("order_no = ?", orderNo).First(&existingOrder).Error; err == nil {
+			if existingOrder.Status == models.OrderStatusRefunded {
+				return &existingOrder, nil
+			}
+		}
+		return nil, errors.New("订单退款正在处理中，请稍后重试")
+	}
+	defer s.idempotentService.ReleaseRefundLock(ctx, orderNo)
+
+	var refreshedOrder models.Order
+	if err := database.DB.Where("order_no = ?", orderNo).First(&refreshedOrder).Error; err != nil {
+		return nil, err
+	}
+
+	if refreshedOrder.Status == models.OrderStatusRefunded {
+		return &refreshedOrder, nil
+	}
+
+	if refreshedOrder.Status != models.OrderStatusCompleted {
+		return nil, errors.New("只有已完成状态的订单可以退款")
+	}
+
+	refreshedOrder.Status = models.OrderStatusRefunded
+	if err := database.DB.Save(&refreshedOrder).Error; err != nil {
+		return nil, err
+	}
+
+	return &refreshedOrder, nil
+}

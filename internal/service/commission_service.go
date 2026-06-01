@@ -119,6 +119,95 @@ func (s *CommissionService) SettleCommission(commissionID uint, operatorID uint)
 	})
 }
 
+func (s *CommissionService) RollbackCommission(orderNo string, operatorID uint) error {
+	var commission models.CommissionRecord
+	if err := database.DB.Where("order_no = ?", orderNo).First(&commission).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil
+		}
+		return err
+	}
+
+	if commission.Status == models.CommissionStatusCancelled || commission.Status == models.CommissionStatusRefunded {
+		return nil
+	}
+
+	if commission.Status == models.CommissionStatusPending {
+		commission.Status = models.CommissionStatusCancelled
+		if err := database.DB.Save(&commission).Error; err != nil {
+			return err
+		}
+
+		auditLog := &models.AuditLog{
+			DistributorID: commission.DistributorID,
+			OperatorID:    operatorID,
+			ResourceType:  "commission",
+			ResourceID:    commission.ID,
+			Action:        "cancel",
+			OldStatus:     string(models.CommissionStatusPending),
+			NewStatus:     string(models.CommissionStatusCancelled),
+			ChangeReason:  "订单退款导致佣金取消",
+		}
+		if err := database.DB.Create(auditLog).Error; err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	if commission.Status == models.CommissionStatusSettled {
+		return database.DB.Transaction(func(tx *gorm.DB) error {
+			var c models.CommissionRecord
+			if err := tx.First(&c, commission.ID).Error; err != nil {
+				return err
+			}
+
+			if c.Status != models.CommissionStatusSettled {
+				return errors.New("佣金状态已变更，无法回滚")
+			}
+
+			var distributor models.Distributor
+			if err := tx.First(&distributor, c.DistributorID).Error; err != nil {
+				return err
+			}
+
+			if distributor.Balance < c.Amount {
+				return errors.New("分销员余额不足，无法扣除佣金")
+			}
+
+			if err := tx.Model(&distributor).Updates(map[string]interface{}{
+				"balance":          gorm.Expr("balance - ?", c.Amount),
+				"total_commission": gorm.Expr("total_commission - ?", c.Amount),
+			}).Error; err != nil {
+				return err
+			}
+
+			c.Status = models.CommissionStatusRefunded
+			if err := tx.Save(&c).Error; err != nil {
+				return err
+			}
+
+			auditLog := &models.AuditLog{
+				DistributorID: c.DistributorID,
+				OperatorID:    operatorID,
+				ResourceType:  "commission",
+				ResourceID:    c.ID,
+				Action:        "refund",
+				OldStatus:     string(models.CommissionStatusSettled),
+				NewStatus:     string(models.CommissionStatusRefunded),
+				ChangeReason:  "订单退款导致佣金回滚",
+			}
+			if err := tx.Create(auditLog).Error; err != nil {
+				return err
+			}
+
+			return nil
+		})
+	}
+
+	return errors.New("未知的佣金状态")
+}
+
 func (s *CommissionService) GetByID(id uint) (*models.CommissionRecord, error) {
 	var commission models.CommissionRecord
 	if err := database.DB.Preload("Distributor").First(&commission, id).Error; err != nil {

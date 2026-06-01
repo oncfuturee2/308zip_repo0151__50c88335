@@ -11,6 +11,7 @@ import (
 const (
 	IdempotentKeyPrefixOrder      = "idempotent:order"
 	IdempotentKeyPrefixCommission = "idempotent:commission"
+	IdempotentKeyPrefixRefund     = "idempotent:refund"
 	IdempotentKeyTTL              = 24 * time.Hour
 )
 
@@ -41,6 +42,16 @@ func (s *IdempotentService) AcquireCommissionLock(ctx context.Context, orderNo s
 
 func (s *IdempotentService) ReleaseCommissionLock(ctx context.Context, orderNo string) error {
 	key := s.buildKey(IdempotentKeyPrefixCommission, orderNo)
+	return s.releaseLock(ctx, key)
+}
+
+func (s *IdempotentService) AcquireRefundLock(ctx context.Context, orderNo string) (bool, error) {
+	key := s.buildKey(IdempotentKeyPrefixRefund, orderNo)
+	return s.acquireLock(ctx, key)
+}
+
+func (s *IdempotentService) ReleaseRefundLock(ctx context.Context, orderNo string) error {
+	key := s.buildKey(IdempotentKeyPrefixRefund, orderNo)
 	return s.releaseLock(ctx, key)
 }
 

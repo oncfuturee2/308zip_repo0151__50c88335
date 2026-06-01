@@ -11,13 +11,15 @@ import (
 )
 
 type OrderHandler struct {
-	orderService     *service.OrderService
+	orderService       *service.OrderService
+	commissionService  *service.CommissionService
 	distributorService *service.DistributorService
 }
 
 func NewOrderHandler() *OrderHandler {
 	return &OrderHandler{
 		orderService:       service.NewOrderService(),
+		commissionService:  service.NewCommissionService(),
 		distributorService: service.NewDistributorService(),
 	}
 }
@@ -83,4 +85,31 @@ func (h *OrderHandler) GetOrderList(c *gin.Context) {
 		"page":      page,
 		"page_size": pageSize,
 	})
+}
+
+type RefundOrderRequest struct {
+	OrderNo string `json:"order_no" binding:"required"`
+}
+
+func (h *OrderHandler) RefundOrder(c *gin.Context) {
+	var req RefundOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+
+	operatorID := middleware.GetUserID(c)
+
+	order, err := h.orderService.RefundOrder(c.Request.Context(), req.OrderNo)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	if err := h.commissionService.RollbackCommission(req.OrderNo, operatorID); err != nil {
+		response.BadRequest(c, "佣金回滚失败: "+err.Error())
+		return
+	}
+
+	response.Success(c, order)
 }
