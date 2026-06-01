@@ -5,6 +5,7 @@ import (
 
 	"distribution-commission/internal/middleware"
 	"distribution-commission/internal/pkg/response"
+	"distribution-commission/internal/repository"
 	"distribution-commission/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -15,9 +16,9 @@ type CommissionHandler struct {
 	distributorService *service.DistributorService
 }
 
-func NewCommissionHandler() *CommissionHandler {
+func NewCommissionHandler(orderRepo repository.OrderRepository) *CommissionHandler {
 	return &CommissionHandler{
-		commissionService:  service.NewCommissionService(),
+		commissionService:  service.NewCommissionService(orderRepo),
 		distributorService: service.NewDistributorService(),
 	}
 }
