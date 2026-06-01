@@ -16,9 +16,10 @@ const (
 
 type CommissionRecord struct {
 	ID            uint             `json:"id" gorm:"primaryKey"`
-	OrderNo       string           `json:"order_no" gorm:"uniqueIndex:idx_order_commission;size:32;not null;comment:订单号"`
+	OrderNo       string           `json:"order_no" gorm:"uniqueIndex:idx_order_level;size:32;not null;comment:订单号"`
 	DistributorID uint             `json:"distributor_id" gorm:"index;not null;comment:分销员ID"`
 	Distributor   Distributor      `json:"distributor" gorm:"foreignKey:DistributorID"`
+	Level         int              `json:"level" gorm:"uniqueIndex:idx_order_level;not null;comment:分销层级(1,2,3)"`
 	OrderAmount   int64            `json:"order_amount" gorm:"not null;comment:订单金额(分)"`
 	Rate          int              `json:"rate" gorm:"not null;comment:佣金比例(%)"`
 	Amount        int64            `json:"amount" gorm:"not null;comment:佣金金额(分)"`
