@@ -10,6 +10,8 @@ type Distributor struct {
 	ID              uint           `json:"id" gorm:"primaryKey"`
 	UserID          uint           `json:"user_id" gorm:"uniqueIndex;not null"`
 	User            User           `json:"user" gorm:"foreignKey:UserID"`
+	ParentID        *uint          `json:"parent_id" gorm:"index;comment:上级分销员ID"`
+	Parent          *Distributor   `json:"parent,omitempty" gorm:"foreignKey:ParentID"`
 	RealName        string         `json:"real_name" gorm:"size:50"`
 	Phone           string         `json:"phone" gorm:"size:20"`
 	BankCardNo      string         `json:"bank_card_no" gorm:"size:30"`
@@ -22,6 +24,12 @@ type Distributor struct {
 	UpdatedAt       time.Time      `json:"updated_at"`
 	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
 }
+
+const (
+	CommissionLevelDirect      = 1
+	CommissionLevelParent      = 2
+	CommissionLevelGrandParent = 3
+)
 
 func (Distributor) TableName() string {
 	return "distributors"

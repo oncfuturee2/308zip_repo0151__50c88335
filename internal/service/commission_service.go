@@ -24,7 +24,13 @@ func NewCommissionService() *CommissionService {
 	}
 }
 
-func (s *CommissionService) GenerateCommission(ctx context.Context, orderNo string) (*models.CommissionRecord, error) {
+type commissionTier struct {
+	distributorID uint
+	level         int
+	rate          int
+}
+
+func (s *CommissionService) GenerateCommission(ctx context.Context, orderNo string) ([]*models.CommissionRecord, error) {
 	order, err := s.orderService.GetByOrderNo(orderNo)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -42,38 +48,112 @@ func (s *CommissionService) GenerateCommission(ctx context.Context, orderNo stri
 		return nil, err
 	}
 	if !locked {
-		var existingCommission models.CommissionRecord
-		if err := database.DB.Where("order_no = ?", orderNo).First(&existingCommission).Error; err == nil {
-			return &existingCommission, nil
+		existingCommissions, err := s.findCommissionsByOrderNo(orderNo)
+		if err != nil {
+			return nil, err
+		}
+		if len(existingCommissions) > 0 {
+			return existingCommissions, nil
 		}
 		return nil, errors.New("佣金正在生成中，请稍后重试")
 	}
 	defer s.idempotentService.ReleaseCommissionLock(ctx, orderNo)
 
-	var existingCommission models.CommissionRecord
-	if err := database.DB.Where("order_no = ?", orderNo).First(&existingCommission).Error; err == nil {
-		return &existingCommission, nil
-	} else if err != gorm.ErrRecordNotFound {
+	existingCommissions, err := s.findCommissionsByOrderNo(orderNo)
+	if err != nil {
+		return nil, err
+	}
+	if len(existingCommissions) > 0 {
+		return existingCommissions, nil
+	}
+
+	tiers, err := s.resolveCommissionTiers(order.DistributorID)
+	if err != nil {
 		return nil, err
 	}
 
-	rate := config.AppConfig.CommissionRate
-	amount := int64(float64(order.Amount) * float64(rate) / 100.0)
+	var commissions []*models.CommissionRecord
+	err = database.DB.Transaction(func(tx *gorm.DB) error {
+		for _, tier := range tiers {
+			amount := int64(float64(order.Amount) * float64(tier.rate) / 100.0)
+			if amount <= 0 {
+				continue
+			}
 
-	commission := &models.CommissionRecord{
-		OrderNo:       orderNo,
-		DistributorID: order.DistributorID,
-		OrderAmount:   order.Amount,
-		Rate:          rate,
-		Amount:        amount,
-		Status:        models.CommissionStatusPending,
-	}
+			commission := &models.CommissionRecord{
+				OrderNo:       orderNo,
+				DistributorID: tier.distributorID,
+				Level:         tier.level,
+				OrderAmount:   order.Amount,
+				Rate:          tier.rate,
+				Amount:        amount,
+				Status:        models.CommissionStatusPending,
+			}
 
-	if err := database.DB.Create(commission).Error; err != nil {
+			if err := tx.Create(commission).Error; err != nil {
+				return err
+			}
+
+			commissions = append(commissions, commission)
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 
-	return commission, nil
+	return commissions, nil
+}
+
+func (s *CommissionService) resolveCommissionTiers(distributorID uint) ([]commissionTier, error) {
+	var tiers []commissionTier
+
+	var distributor models.Distributor
+	if err := database.DB.First(&distributor, distributorID).Error; err != nil {
+		return nil, err
+	}
+
+	tiers = append(tiers, commissionTier{
+		distributorID: distributor.ID,
+		level:         models.CommissionLevelDirect,
+		rate:          config.AppConfig.CommissionLevel1Rate,
+	})
+
+	if distributor.ParentID != nil && *distributor.ParentID > 0 {
+		var parent models.Distributor
+		if err := database.DB.First(&parent, *distributor.ParentID).Error; err == nil {
+			tiers = append(tiers, commissionTier{
+				distributorID: parent.ID,
+				level:         models.CommissionLevelParent,
+				rate:          config.AppConfig.CommissionLevel2Rate,
+			})
+
+			if parent.ParentID != nil && *parent.ParentID > 0 {
+				var grandParent models.Distributor
+				if err := database.DB.First(&grandParent, *parent.ParentID).Error; err == nil {
+					tiers = append(tiers, commissionTier{
+						distributorID: grandParent.ID,
+						level:         models.CommissionLevelGrandParent,
+						rate:          config.AppConfig.CommissionLevel3Rate,
+					})
+				}
+			}
+		}
+	}
+
+	return tiers, nil
+}
+
+func (s *CommissionService) findCommissionsByOrderNo(orderNo string) ([]*models.CommissionRecord, error) {
+	var commissions []models.CommissionRecord
+	if err := database.DB.Where("order_no = ?", orderNo).Find(&commissions).Error; err != nil {
+		return nil, err
+	}
+	result := make([]*models.CommissionRecord, len(commissions))
+	for i := range commissions {
+		result[i] = &commissions[i]
+	}
+	return result, nil
 }
 
 func (s *CommissionService) SettleCommission(commissionID uint, operatorID uint) error {

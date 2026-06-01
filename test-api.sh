@@ -74,10 +74,12 @@ COMMISSION_RESPONSE=$(curl -s -X POST "$BASE_URL/commissions/generate" \
   -d '{"order_no":"ORD20260502TEST001"}')
 
 echo "响应: $COMMISSION_RESPONSE"
-COMMISSION_ID=$(echo $COMMISSION_RESPONSE | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])")
-COMMISSION_AMOUNT=$(echo $COMMISSION_RESPONSE | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['amount'])")
-echo "佣金 ID: $COMMISSION_ID"
-echo "佣金金额: $COMMISSION_AMOUNT 分 (预计: 1000 分 = 10 元, 10% 比例)"
+COMMISSION_COUNT=$(echo $COMMISSION_RESPONSE | python3 -c "import sys,json; data=json.load(sys.stdin)['data']; print(len(data))")
+COMMISSION_ID=$(echo $COMMISSION_RESPONSE | python3 -c "import sys,json; data=json.load(sys.stdin)['data']; print(data[0]['id'])")
+COMMISSION_AMOUNT=$(echo $COMMISSION_RESPONSE | python3 -c "import sys,json; data=json.load(sys.stdin)['data']; print(data[0]['amount'])")
+echo "佣金记录数: $COMMISSION_COUNT"
+echo "一级佣金 ID: $COMMISSION_ID"
+echo "一级佣金金额: $COMMISSION_AMOUNT 分 (预计: 1000 分 = 10 元, 10% 比例)"
 echo ""
 
 echo "【步骤7】重复生成佣金 (幂等验证)"
@@ -88,8 +90,10 @@ COMMISSION_RESPONSE2=$(curl -s -X POST "$BASE_URL/commissions/generate" \
   -d '{"order_no":"ORD20260502TEST001"}')
 
 echo "响应: $COMMISSION_RESPONSE2"
-COMMISSION_ID2=$(echo $COMMISSION_RESPONSE2 | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])")
-echo "佣金 ID: $COMMISSION_ID2"
+COMMISSION_COUNT2=$(echo $COMMISSION_RESPONSE2 | python3 -c "import sys,json; data=json.load(sys.stdin)['data']; print(len(data))")
+COMMISSION_ID2=$(echo $COMMISSION_RESPONSE2 | python3 -c "import sys,json; data=json.load(sys.stdin)['data']; print(data[0]['id'])")
+echo "佣金记录数: $COMMISSION_COUNT2"
+echo "一级佣金 ID: $COMMISSION_ID2"
 if [ "$COMMISSION_ID" = "$COMMISSION_ID2" ]; then
   echo "✅ 幂等验证通过: 相同 order_no 返回相同佣金 ID"
 else

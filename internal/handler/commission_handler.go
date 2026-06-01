@@ -37,13 +37,13 @@ func (h *CommissionHandler) GenerateCommission(c *gin.Context) {
 		return
 	}
 
-	commission, err := h.commissionService.GenerateCommission(c.Request.Context(), req.OrderNo)
+	commissions, err := h.commissionService.GenerateCommission(c.Request.Context(), req.OrderNo)
 	if err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
 
-	response.Success(c, commission)
+	response.Success(c, commissions)
 }
 
 func (h *CommissionHandler) SettleCommission(c *gin.Context) {

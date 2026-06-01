@@ -81,6 +81,7 @@
 ### 2. distributors - 分销员表
 - `id` - 主键
 - `user_id` - 用户ID（唯一）
+- `parent_id` - 上级分销员ID（支持三级分销层级）
 - `real_name` - 真实姓名
 - `phone` - 手机号
 - `bank_card_no` - 银行卡号
@@ -100,8 +101,9 @@
 
 ### 4. commission_records - 佣金记录表
 - `id` - 主键
-- `order_no` - 订单号（唯一索引，保证幂等）
+- `order_no` - 订单号（与 distributor_id 组成联合唯一索引，保证同订单同分销员幂等）
 - `distributor_id` - 分销员ID
+- `level` - 佣金层级：1-一级（直接） 2-二级（上级） 3-三级（上上级）
 - `order_amount` - 订单金额（分）
 - `rate` - 佣金比例（%）
 - `amount` - 佣金金额（分）
@@ -282,7 +284,8 @@ curl -X POST http://127.0.0.1:18080/api/v1/commissions/generate \
   -H "Authorization: Bearer <distributor_token>" \
   -d '{"order_no":"ORD20260502TEST001"}'
 ```
-> 默认佣金比例 10%，10000 分订单应生成 1000 分（10元）佣金
+> 默认三级佣金比例：一级10%（直接分销员）、二级5%（上级）、三级3%（上上级），
+> 10000 分订单将生成多条佣金记录（若有上级层级关系）
 
 ### 步骤 5：重复生成佣金（幂等验证）
 
@@ -368,7 +371,9 @@ curl -X GET "http://127.0.0.1:18080/api/v1/audit-logs?resource_type=withdraw" \
 | REDIS_PASSWORD | Redis 密码 | 空 |
 | JWT_SECRET | JWT 密钥 | your_jwt_secret_key_here |
 | JWT_EXPIRE_HOURS | JWT 过期时间（小时） | 24 |
-| COMMISSION_RATE | 佣金比例（%） | 10 |
+| COMMISSION_LEVEL1_RATE | 一级佣金比例（%） | 10 |
+| COMMISSION_LEVEL2_RATE | 二级佣金比例（%） | 5 |
+| COMMISSION_LEVEL3_RATE | 三级佣金比例（%） | 3 |
 
 ## 注意事项
 
@@ -379,8 +384,6 @@ curl -X GET "http://127.0.0.1:18080/api/v1/audit-logs?resource_type=withdraw" \
 
 ## 不包含的功能（MVP 简化）
 
-- ❌ 多层分销关系（仅一层）
-- ❌ 复杂等级规则（固定比例）
 - ❌ 退款冲减
 - ❌ 风控人工复核
 - ❌ 真实打款（仅 Mock）
