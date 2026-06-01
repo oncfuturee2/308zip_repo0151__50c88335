@@ -9,15 +9,18 @@ import (
 	"distribution-commission/internal/pkg/utils"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type OrderService struct {
 	idempotentService *IdempotentService
+	commissionService *CommissionService
 }
 
 func NewOrderService() *OrderService {
 	return &OrderService{
 		idempotentService: NewIdempotentService(),
+		commissionService: NewCommissionService(),
 	}
 }
 
@@ -59,6 +62,60 @@ func (s *OrderService) CreateCompletedOrder(ctx context.Context, orderNo string,
 	}
 
 	return order, nil
+}
+
+func (s *OrderService) RefundOrder(ctx context.Context, orderNo string, operatorID uint) (*models.Order, error) {
+	locked, err := s.idempotentService.AcquireOrderRefundLock(ctx, orderNo)
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		var existingOrder models.Order
+		if err := database.DB.Where("order_no = ?", orderNo).First(&existingOrder).Error; err == nil {
+			if existingOrder.Status == models.OrderStatusRefunded {
+				return &existingOrder, nil
+			}
+			return nil, errors.New("订单退款正在处理中，请稍后重试")
+		}
+		return nil, errors.New("订单不存在")
+	}
+	defer s.idempotentService.ReleaseOrderRefundLock(ctx, orderNo)
+
+	var refundedOrder models.Order
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var order models.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_no = ?", orderNo).First(&order).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return errors.New("订单不存在")
+			}
+			return err
+		}
+
+		if order.Status == models.OrderStatusRefunded {
+			refundedOrder = order
+			return nil
+		}
+
+		if order.Status != models.OrderStatusCompleted {
+			return errors.New("只有已完成的订单可以退款")
+		}
+
+		order.Status = models.OrderStatusRefunded
+		if err := tx.Save(&order).Error; err != nil {
+			return err
+		}
+
+		if err := s.commissionService.RollbackByOrderNoTx(tx, order.OrderNo, operatorID); err != nil {
+			return err
+		}
+
+		refundedOrder = order
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return &refundedOrder, nil
 }
 
 func (s *OrderService) GetByOrderNo(orderNo string) (*models.Order, error) {

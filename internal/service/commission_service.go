@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"distribution-commission/internal/config"
@@ -10,23 +11,22 @@ import (
 	"distribution-commission/internal/models"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type CommissionService struct {
 	idempotentService *IdempotentService
-	orderService      *OrderService
 }
 
 func NewCommissionService() *CommissionService {
 	return &CommissionService{
 		idempotentService: NewIdempotentService(),
-		orderService:      NewOrderService(),
 	}
 }
 
 func (s *CommissionService) GenerateCommission(ctx context.Context, orderNo string) (*models.CommissionRecord, error) {
-	order, err := s.orderService.GetByOrderNo(orderNo)
-	if err != nil {
+	var order models.Order
+	if err := database.DB.Where("order_no = ?", orderNo).First(&order).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, errors.New("订单不存在")
 		}
@@ -74,6 +74,63 @@ func (s *CommissionService) GenerateCommission(ctx context.Context, orderNo stri
 	}
 
 	return commission, nil
+}
+
+func (s *CommissionService) RollbackByOrderNoTx(tx *gorm.DB, orderNo string, operatorID uint) error {
+	var commission models.CommissionRecord
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_no = ?", orderNo).First(&commission).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil
+		}
+		return err
+	}
+
+	switch commission.Status {
+	case models.CommissionStatusPending:
+		commission.Status = models.CommissionStatusCancelled
+		return tx.Save(&commission).Error
+	case models.CommissionStatusSettled:
+		var distributor models.Distributor
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&distributor, commission.DistributorID).Error; err != nil {
+			return err
+		}
+
+		if distributor.Balance < commission.Amount {
+			return errors.New("分销员可用余额不足，无法回滚已结算佣金")
+		}
+		if distributor.TotalCommission < commission.Amount {
+			return errors.New("分销员累计佣金不足，无法回滚已结算佣金")
+		}
+
+		oldStatus := commission.Status
+		commission.Status = models.CommissionStatusRefunded
+		if err := tx.Save(&commission).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&models.Distributor{}).Where("id = ?", distributor.ID).Updates(map[string]interface{}{
+			"balance":          distributor.Balance - commission.Amount,
+			"total_commission": distributor.TotalCommission - commission.Amount,
+		}).Error; err != nil {
+			return err
+		}
+
+		auditLog := &models.AuditLog{
+			DistributorID: commission.DistributorID,
+			OperatorID:    operatorID,
+			ResourceType:  "commission",
+			ResourceID:    commission.ID,
+			Action:        "refund",
+			OldStatus:     string(oldStatus),
+			NewStatus:     string(models.CommissionStatusRefunded),
+			ChangeReason:  fmt.Sprintf("订单退款导致佣金回滚，订单号: %s", orderNo),
+		}
+		return tx.Create(auditLog).Error
+	case models.CommissionStatusCancelled, models.CommissionStatusRefunded:
+		return nil
+	default:
+		return errors.New("当前佣金状态不支持回滚")
+	}
 }
 
 func (s *CommissionService) SettleCommission(commissionID uint, operatorID uint) error {

@@ -25,6 +25,7 @@ func SetupRouter() *gin.Engine {
 		api.GET("/profile", middleware.JWTAuth(), authHandler.GetProfile)
 
 		api.POST("/orders", middleware.JWTAuth(), middleware.RequireRoles("distributor"), orderHandler.CreateCompletedOrder)
+		api.POST("/orders/refund", middleware.JWTAuth(), middleware.RequireRoles("admin", "finance"), orderHandler.RefundOrder)
 		api.GET("/orders", middleware.JWTAuth(), middleware.RequireRoles("distributor"), orderHandler.GetOrderList)
 
 		api.GET("/commissions", middleware.JWTAuth(), middleware.RequireRoles("distributor"), commissionHandler.GetCommissionList)

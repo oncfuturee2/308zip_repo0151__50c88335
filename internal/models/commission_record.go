@@ -12,6 +12,7 @@ const (
 	CommissionStatusPending   CommissionStatus = "pending"
 	CommissionStatusSettled   CommissionStatus = "settled"
 	CommissionStatusCancelled CommissionStatus = "cancelled"
+	CommissionStatusRefunded  CommissionStatus = "refunded"
 )
 
 type CommissionRecord struct {
