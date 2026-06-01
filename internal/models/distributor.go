@@ -10,6 +10,9 @@ type Distributor struct {
 	ID              uint           `json:"id" gorm:"primaryKey"`
 	UserID          uint           `json:"user_id" gorm:"uniqueIndex;not null"`
 	User            User           `json:"user" gorm:"foreignKey:UserID"`
+	ParentID        *uint          `json:"parent_id" gorm:"index;comment:上级分销商ID"`
+	Parent          *Distributor   `json:"parent,omitempty" gorm:"foreignKey:ParentID"`
+	Children        []Distributor  `json:"children,omitempty" gorm:"foreignKey:ParentID"`
 	RealName        string         `json:"real_name" gorm:"size:50"`
 	Phone           string         `json:"phone" gorm:"size:20"`
 	BankCardNo      string         `json:"bank_card_no" gorm:"size:30"`

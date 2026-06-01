@@ -14,6 +14,10 @@ func NewDistributorService() *DistributorService {
 }
 
 func (s *DistributorService) CreateDistributor(userID uint, realName, phone, bankCardNo, bankName string) (*models.Distributor, error) {
+	return s.CreateDistributorWithParent(userID, realName, phone, bankCardNo, bankName, nil)
+}
+
+func (s *DistributorService) CreateDistributorWithParent(userID uint, realName, phone, bankCardNo, bankName string, parentID *uint) (*models.Distributor, error) {
 	var existing models.Distributor
 	if err := database.DB.Where("user_id = ?", userID).First(&existing).Error; err == nil {
 		return nil, gorm.ErrRecordNotFound
@@ -26,6 +30,7 @@ func (s *DistributorService) CreateDistributor(userID uint, realName, phone, ban
 		BankCardNo: bankCardNo,
 		BankName:   bankName,
 		Status:     1,
+		ParentID:   parentID,
 	}
 
 	if err := database.DB.Create(distributor).Error; err != nil {

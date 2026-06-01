@@ -45,7 +45,15 @@ func (s *IdempotentService) ReleaseCommissionLock(ctx context.Context, orderNo s
 }
 
 func (s *IdempotentService) acquireLock(ctx context.Context, key string) (bool, error) {
-	result, err := database.RedisClient.SetNX(ctx, key, "1", IdempotentKeyTTL).Result()
+	var result bool
+	var err error
+
+	if database.UseMockRedis {
+		result, err = database.GetMockRedis().SetNX(ctx, key, "1", IdempotentKeyTTL).Result()
+	} else {
+		result, err = database.RedisClient.SetNX(ctx, key, "1", IdempotentKeyTTL).Result()
+	}
+
 	if err != nil {
 		return false, err
 	}
@@ -53,12 +61,15 @@ func (s *IdempotentService) acquireLock(ctx context.Context, key string) (bool, 
 }
 
 func (s *IdempotentService) releaseLock(ctx context.Context, key string) error {
+	if database.UseMockRedis {
+		return database.GetMockRedis().Del(ctx, key).Err()
+	}
 	return database.RedisClient.Del(ctx, key).Err()
 }
 
 func (s *IdempotentService) IsOrderProcessed(ctx context.Context, orderNo string) (bool, error) {
 	key := s.buildKey(IdempotentKeyPrefixOrder, orderNo)
-	exists, err := database.RedisClient.Exists(ctx, key).Result()
+	exists, err := s.checkExists(ctx, key)
 	if err != nil {
 		return false, err
 	}
@@ -67,9 +78,16 @@ func (s *IdempotentService) IsOrderProcessed(ctx context.Context, orderNo string
 
 func (s *IdempotentService) IsCommissionGenerated(ctx context.Context, orderNo string) (bool, error) {
 	key := s.buildKey(IdempotentKeyPrefixCommission, orderNo)
-	exists, err := database.RedisClient.Exists(ctx, key).Result()
+	exists, err := s.checkExists(ctx, key)
 	if err != nil {
 		return false, err
 	}
 	return exists > 0, nil
+}
+
+func (s *IdempotentService) checkExists(ctx context.Context, key string) (int64, error) {
+	if database.UseMockRedis {
+		return database.GetMockRedis().Exists(ctx, key).Result()
+	}
+	return database.RedisClient.Exists(ctx, key).Result()
 }
