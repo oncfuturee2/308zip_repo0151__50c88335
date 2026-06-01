@@ -8,6 +8,7 @@ import (
 	"distribution-commission/internal/pkg/utils"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type WithdrawService struct {
@@ -30,10 +31,6 @@ func (s *WithdrawService) SubmitWithdraw(distributorID uint, amount int64) (*mod
 		return nil, err
 	}
 
-	if distributor.Balance < amount {
-		return nil, errors.New("余额不足")
-	}
-
 	if distributor.BankCardNo == "" || distributor.RealName == "" {
 		return nil, errors.New("请先完善银行卡信息")
 	}
@@ -49,6 +46,15 @@ func (s *WithdrawService) SubmitWithdraw(distributorID uint, amount int64) (*mod
 	var withdraw *models.WithdrawRequest
 
 	err = database.DB.Transaction(func(tx *gorm.DB) error {
+		var locked models.Distributor
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, distributorID).Error; err != nil {
+			return err
+		}
+
+		if locked.Balance < amount {
+			return errors.New("余额不足")
+		}
+
 		requestNo := utils.GenerateWithdrawRequestNo()
 
 		withdraw = &models.WithdrawRequest{
