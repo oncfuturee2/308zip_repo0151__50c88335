@@ -13,67 +13,98 @@ import (
 )
 
 type CommissionService struct {
-	idempotentService *IdempotentService
-	orderService      *OrderService
+	idempotentService  *IdempotentService
+	orderService       *OrderService
+	distributorService *DistributorService
 }
 
 func NewCommissionService() *CommissionService {
 	return &CommissionService{
-		idempotentService: NewIdempotentService(),
-		orderService:      NewOrderService(),
+		idempotentService:  NewIdempotentService(),
+		orderService:       NewOrderService(),
+		distributorService: NewDistributorService(),
 	}
 }
 
-func (s *CommissionService) GenerateCommission(ctx context.Context, orderNo string) (*models.CommissionRecord, error) {
-	order, err := s.orderService.GetByOrderNo(orderNo)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, errors.New("订单不存在")
-		}
-		return nil, err
-	}
-
-	if order.Status != models.OrderStatusCompleted {
-		return nil, errors.New("订单未完成，不能生成佣金")
-	}
-
+func (s *CommissionService) GenerateCommission(ctx context.Context, orderNo string) ([]models.CommissionRecord, error) {
 	locked, err := s.idempotentService.AcquireCommissionLock(ctx, orderNo)
 	if err != nil {
 		return nil, err
 	}
 	if !locked {
-		var existingCommission models.CommissionRecord
-		if err := database.DB.Where("order_no = ?", orderNo).First(&existingCommission).Error; err == nil {
-			return &existingCommission, nil
+		existingCommissions, err := s.findByOrderNo(database.DB, orderNo)
+		if err != nil {
+			return nil, err
+		}
+		if len(existingCommissions) > 0 {
+			return existingCommissions, nil
 		}
 		return nil, errors.New("佣金正在生成中，请稍后重试")
 	}
 	defer s.idempotentService.ReleaseCommissionLock(ctx, orderNo)
 
-	var existingCommission models.CommissionRecord
-	if err := database.DB.Where("order_no = ?", orderNo).First(&existingCommission).Error; err == nil {
-		return &existingCommission, nil
-	} else if err != gorm.ErrRecordNotFound {
+	var commissions []models.CommissionRecord
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		order, err := s.orderService.getByOrderNoTx(tx, orderNo)
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return errors.New("订单不存在")
+			}
+			return err
+		}
+
+		if order.Status != models.OrderStatusCompleted {
+			return errors.New("订单未完成，不能生成佣金")
+		}
+
+		commissions, err = s.findByOrderNo(tx, orderNo)
+		if err != nil {
+			return err
+		}
+		if len(commissions) > 0 {
+			return nil
+		}
+
+		ratePlan := config.AppConfig.CommissionRates()
+		chain, err := s.distributorService.GetUplineChainTx(tx, order.DistributorID, len(ratePlan))
+		if err != nil {
+			return err
+		}
+
+		newCommissions := make([]models.CommissionRecord, 0, len(chain))
+		for index, distributor := range chain {
+			rate := ratePlan[index]
+			if rate <= 0 {
+				continue
+			}
+
+			newCommissions = append(newCommissions, models.CommissionRecord{
+				OrderNo:             order.OrderNo,
+				DistributorID:       distributor.ID,
+				SourceDistributorID: order.DistributorID,
+				OrderAmount:         order.Amount,
+				Level:               index + 1,
+				Rate:                rate,
+				Amount:              calculateCommissionAmount(order.Amount, rate),
+				Status:              models.CommissionStatusPending,
+			})
+		}
+
+		if len(newCommissions) == 0 {
+			return errors.New("未配置有效佣金比例")
+		}
+
+		if err := tx.Create(&newCommissions).Error; err != nil {
+			return err
+		}
+
+		commissions = newCommissions
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 
-	rate := config.AppConfig.CommissionRate
-	amount := int64(float64(order.Amount) * float64(rate) / 100.0)
-
-	commission := &models.CommissionRecord{
-		OrderNo:       orderNo,
-		DistributorID: order.DistributorID,
-		OrderAmount:   order.Amount,
-		Rate:          rate,
-		Amount:        amount,
-		Status:        models.CommissionStatusPending,
-	}
-
-	if err := database.DB.Create(commission).Error; err != nil {
-		return nil, err
-	}
-
-	return commission, nil
+	return commissions, nil
 }
 
 func (s *CommissionService) SettleCommission(commissionID uint, operatorID uint) error {
@@ -121,7 +152,7 @@ func (s *CommissionService) SettleCommission(commissionID uint, operatorID uint)
 
 func (s *CommissionService) GetByID(id uint) (*models.CommissionRecord, error) {
 	var commission models.CommissionRecord
-	if err := database.DB.Preload("Distributor").First(&commission, id).Error; err != nil {
+	if err := database.DB.Preload("Distributor").Preload("SourceDistributor").First(&commission, id).Error; err != nil {
 		return nil, err
 	}
 	return &commission, nil
@@ -143,9 +174,21 @@ func (s *CommissionService) ListByDistributor(distributorID uint, status string,
 		return nil, 0, err
 	}
 
-	if err := query.Offset(offset).Limit(pageSize).Order("created_at DESC").Find(&commissions).Error; err != nil {
+	if err := query.Preload("SourceDistributor").Offset(offset).Limit(pageSize).Order("created_at DESC, level ASC").Find(&commissions).Error; err != nil {
 		return nil, 0, err
 	}
 
 	return commissions, total, nil
+}
+
+func (s *CommissionService) findByOrderNo(db *gorm.DB, orderNo string) ([]models.CommissionRecord, error) {
+	var commissions []models.CommissionRecord
+	if err := db.Where("order_no = ?", orderNo).Preload("Distributor").Preload("SourceDistributor").Order("level ASC, id ASC").Find(&commissions).Error; err != nil {
+		return nil, err
+	}
+	return commissions, nil
+}
+
+func calculateCommissionAmount(orderAmount int64, rate int) int64 {
+	return orderAmount * int64(rate) / 100
 }

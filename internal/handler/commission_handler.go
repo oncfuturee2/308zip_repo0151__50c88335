@@ -37,13 +37,17 @@ func (h *CommissionHandler) GenerateCommission(c *gin.Context) {
 		return
 	}
 
-	commission, err := h.commissionService.GenerateCommission(c.Request.Context(), req.OrderNo)
+	commissions, err := h.commissionService.GenerateCommission(c.Request.Context(), req.OrderNo)
 	if err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
 
-	response.Success(c, commission)
+	response.Success(c, gin.H{
+		"order_no": req.OrderNo,
+		"count":    len(commissions),
+		"records":  commissions,
+	})
 }
 
 func (h *CommissionHandler) SettleCommission(c *gin.Context) {
@@ -114,8 +118,8 @@ func (h *CommissionHandler) GetBalance(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"balance":           balance,
-		"frozen_balance":    frozenBalance,
-		"total_commission":  totalCommission,
+		"balance":          balance,
+		"frozen_balance":   frozenBalance,
+		"total_commission": totalCommission,
 	})
 }

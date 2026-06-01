@@ -62,19 +62,7 @@ func (s *OrderService) CreateCompletedOrder(ctx context.Context, orderNo string,
 }
 
 func (s *OrderService) GetByOrderNo(orderNo string) (*models.Order, error) {
-	var order models.Order
-	if err := database.DB.Where("order_no = ?", orderNo).Preload("Distributor").First(&order).Error; err != nil {
-		return nil, err
-	}
-	return &order, nil
-}
-
-func (s *OrderService) GetByID(id uint) (*models.Order, error) {
-	var order models.Order
-	if err := database.DB.Preload("Distributor").First(&order, id).Error; err != nil {
-		return nil, err
-	}
-	return &order, nil
+	return s.getByOrderNoTx(database.DB, orderNo)
 }
 
 func (s *OrderService) ListByDistributor(distributorID uint, page, pageSize int) ([]models.Order, int64, error) {
@@ -94,4 +82,12 @@ func (s *OrderService) ListByDistributor(distributorID uint, page, pageSize int)
 	}
 
 	return orders, total, nil
+}
+
+func (s *OrderService) getByOrderNoTx(db *gorm.DB, orderNo string) (*models.Order, error) {
+	var order models.Order
+	if err := db.Where("order_no = ?", orderNo).Preload("Distributor").First(&order).Error; err != nil {
+		return nil, err
+	}
+	return &order, nil
 }

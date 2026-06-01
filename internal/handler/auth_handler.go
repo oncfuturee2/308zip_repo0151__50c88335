@@ -49,12 +49,13 @@ func (h *AuthHandler) Login(c *gin.Context) {
 }
 
 type CreateDistributorRequest struct {
-	Username   string `json:"username" binding:"required"`
-	Password   string `json:"password" binding:"required"`
-	RealName   string `json:"real_name"`
-	Phone      string `json:"phone"`
-	BankCardNo string `json:"bank_card_no"`
-	BankName   string `json:"bank_name"`
+	Username            string `json:"username" binding:"required"`
+	Password            string `json:"password" binding:"required"`
+	ParentDistributorID uint   `json:"parent_distributor_id"`
+	RealName            string `json:"real_name"`
+	Phone               string `json:"phone"`
+	BankCardNo          string `json:"bank_card_no"`
+	BankName            string `json:"bank_name"`
 }
 
 func (h *AuthHandler) CreateDistributor(c *gin.Context) {
@@ -71,7 +72,7 @@ func (h *AuthHandler) CreateDistributor(c *gin.Context) {
 	}
 
 	distributorService := service.NewDistributorService()
-	distributor, err := distributorService.CreateDistributor(user.ID, req.RealName, req.Phone, req.BankCardNo, req.BankName)
+	distributor, err := distributorService.CreateDistributor(user.ID, req.ParentDistributorID, req.RealName, req.Phone, req.BankCardNo, req.BankName)
 	if err != nil {
 		response.InternalError(c, "创建分销员失败: "+err.Error())
 		return

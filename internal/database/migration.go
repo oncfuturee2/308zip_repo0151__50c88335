@@ -19,5 +19,9 @@ func RunMigrations() {
 		log.Fatalf("Migration failed: %v", err)
 	}
 
+	if err := DB.Exec("DROP INDEX IF EXISTS idx_order_commission").Error; err != nil {
+		log.Fatalf("Failed to drop legacy commission index: %v", err)
+	}
+
 	log.Println("Migrations completed successfully")
 }

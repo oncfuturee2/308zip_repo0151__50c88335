@@ -185,6 +185,45 @@ func TestAuthHandler_CreateDistributor_Success(t *testing.T) {
 	assert.Equal(t, user.Username, distributor.User.Username)
 }
 
+func TestAuthHandler_CreateDistributor_Success_WithParentDistributor(t *testing.T) {
+	database.SetupTestDB()
+	defer database.CleanupTestDB()
+
+	userService := service.NewUserService()
+	distributorService := service.NewDistributorService()
+
+	parentUser, err := userService.CreateUser("parentuser", "password123", models.RoleDistributor)
+	assert.NoError(t, err)
+	parentDistributor, err := distributorService.CreateDistributor(parentUser.ID, 0, "父级", "", "", "")
+	assert.NoError(t, err)
+
+	handler := NewAuthHandler()
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	reqBody := CreateDistributorRequest{
+		Username:            "childuser",
+		Password:            "password123",
+		ParentDistributorID: parentDistributor.ID,
+		RealName:            "子级",
+	}
+	jsonBody, _ := json.Marshal(reqBody)
+	c.Request, _ = http.NewRequest("POST", "/api/v1/distributors", bytes.NewBuffer(jsonBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	handler.CreateDistributor(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+
+	assert.Equal(t, float64(200), response["code"])
+	data := response["data"].(map[string]interface{})
+	assert.Equal(t, float64(parentDistributor.ID), data["parent_id"])
+}
+
 func TestAuthHandler_CreateDistributor_Success_WithMinimalFields(t *testing.T) {
 	database.SetupTestDB()
 	defer database.CleanupTestDB()
