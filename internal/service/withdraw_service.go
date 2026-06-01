@@ -65,11 +65,16 @@ func (s *WithdrawService) SubmitWithdraw(distributorID uint, amount int64) (*mod
 			return err
 		}
 
-		if err := tx.Model(&models.Distributor{}).Where("id = ?", distributorID).Updates(map[string]interface{}{
+		// 使用基于查询条件的乐观锁策略保证并发下的余额绝对安全
+		res := tx.Model(&models.Distributor{}).Where("id = ? AND balance >= ?", distributorID, amount).Updates(map[string]interface{}{
 			"balance":        gorm.Expr("balance - ?", amount),
 			"frozen_balance": gorm.Expr("frozen_balance + ?", amount),
-		}).Error; err != nil {
-			return err
+		})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return errors.New("并发操作导致余额不足")
 		}
 
 		return nil
