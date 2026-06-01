@@ -8,6 +8,7 @@ import (
 	"distribution-commission/internal/config"
 	"distribution-commission/internal/database"
 	"distribution-commission/internal/models"
+	"distribution-commission/internal/repository"
 
 	"gorm.io/gorm"
 )
@@ -18,9 +19,10 @@ type CommissionService struct {
 }
 
 func NewCommissionService() *CommissionService {
+	orderRepo := repository.NewOrderRepository(database.DB)
 	return &CommissionService{
 		idempotentService: NewIdempotentService(),
-		orderService:      NewOrderService(),
+		orderService:      NewOrderService(orderRepo),
 	}
 }
 
