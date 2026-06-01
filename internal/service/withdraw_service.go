@@ -25,20 +25,16 @@ func (s *WithdrawService) SubmitWithdraw(distributorID uint, amount int64) (*mod
 		return nil, errors.New("提现金额必须大于0")
 	}
 
-	var distributor models.Distributor
-	if err := database.DB.First(&distributor, distributorID).Error; err != nil {
+	var validatedDistributor models.Distributor
+	if err := database.DB.Select("id", "bank_card_no", "bank_name", "real_name").First(&validatedDistributor, distributorID).Error; err != nil {
 		return nil, err
 	}
 
-	if distributor.Balance < amount {
-		return nil, errors.New("余额不足")
-	}
-
-	if distributor.BankCardNo == "" || distributor.RealName == "" {
+	if validatedDistributor.BankCardNo == "" || validatedDistributor.RealName == "" {
 		return nil, errors.New("请先完善银行卡信息")
 	}
 
-	valid, err := s.payoutProvider.ValidateBankCard(distributor.BankCardNo, distributor.BankName, distributor.RealName)
+	valid, err := s.payoutProvider.ValidateBankCard(validatedDistributor.BankCardNo, validatedDistributor.BankName, validatedDistributor.RealName)
 	if err != nil {
 		return nil, errors.New("银行卡校验失败: " + err.Error())
 	}
@@ -49,26 +45,41 @@ func (s *WithdrawService) SubmitWithdraw(distributorID uint, amount int64) (*mod
 	var withdraw *models.WithdrawRequest
 
 	err = database.DB.Transaction(func(tx *gorm.DB) error {
-		requestNo := utils.GenerateWithdrawRequestNo()
+		updateResult := tx.Model(&models.Distributor{}).Where("id = ? AND balance >= ?", distributorID, amount).Updates(map[string]interface{}{
+			"balance":        gorm.Expr("balance - ?", amount),
+			"frozen_balance": gorm.Expr("frozen_balance + ?", amount),
+		})
+		if updateResult.Error != nil {
+			return updateResult.Error
+		}
+		if updateResult.RowsAffected == 0 {
+			return errors.New("余额不足")
+		}
+
+		var currentDistributor models.Distributor
+		if err := tx.Select("id", "bank_card_no", "bank_name", "real_name").First(&currentDistributor, distributorID).Error; err != nil {
+			return err
+		}
+
+		if currentDistributor.BankCardNo == "" || currentDistributor.RealName == "" {
+			return errors.New("请先完善银行卡信息")
+		}
+
+		if currentDistributor.BankCardNo != validatedDistributor.BankCardNo || currentDistributor.BankName != validatedDistributor.BankName || currentDistributor.RealName != validatedDistributor.RealName {
+			return errors.New("银行卡信息已变更，请重新提交提现申请")
+		}
 
 		withdraw = &models.WithdrawRequest{
-			RequestNo:     requestNo,
+			RequestNo:     utils.GenerateWithdrawRequestNo(),
 			DistributorID: distributorID,
 			Amount:        amount,
-			BankCardNo:    distributor.BankCardNo,
-			BankName:      distributor.BankName,
-			RealName:      distributor.RealName,
+			BankCardNo:    currentDistributor.BankCardNo,
+			BankName:      currentDistributor.BankName,
+			RealName:      currentDistributor.RealName,
 			Status:        models.WithdrawStatusPending,
 		}
 
 		if err := tx.Create(withdraw).Error; err != nil {
-			return err
-		}
-
-		if err := tx.Model(&models.Distributor{}).Where("id = ?", distributorID).Updates(map[string]interface{}{
-			"balance":        gorm.Expr("balance - ?", amount),
-			"frozen_balance": gorm.Expr("frozen_balance + ?", amount),
-		}).Error; err != nil {
 			return err
 		}
 
