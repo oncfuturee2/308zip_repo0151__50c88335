@@ -8,6 +8,7 @@ import (
 	"distribution-commission/internal/pkg/utils"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type WithdrawService struct {
@@ -25,33 +26,31 @@ func (s *WithdrawService) SubmitWithdraw(distributorID uint, amount int64) (*mod
 		return nil, errors.New("提现金额必须大于0")
 	}
 
-	var distributor models.Distributor
-	if err := database.DB.First(&distributor, distributorID).Error; err != nil {
-		return nil, err
-	}
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var distributor models.Distributor
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&distributor, distributorID).Error; err != nil {
+			return err
+		}
 
-	if distributor.Balance < amount {
-		return nil, errors.New("余额不足")
-	}
+		if distributor.Balance < amount {
+			return errors.New("余额不足")
+		}
 
-	if distributor.BankCardNo == "" || distributor.RealName == "" {
-		return nil, errors.New("请先完善银行卡信息")
-	}
+		if distributor.BankCardNo == "" || distributor.RealName == "" {
+			return errors.New("请先完善银行卡信息")
+		}
 
-	valid, err := s.payoutProvider.ValidateBankCard(distributor.BankCardNo, distributor.BankName, distributor.RealName)
-	if err != nil {
-		return nil, errors.New("银行卡校验失败: " + err.Error())
-	}
-	if !valid {
-		return nil, errors.New("银行卡信息校验不通过")
-	}
+		valid, err := s.payoutProvider.ValidateBankCard(distributor.BankCardNo, distributor.BankName, distributor.RealName)
+		if err != nil {
+			return errors.New("银行卡校验失败: " + err.Error())
+		}
+		if !valid {
+			return errors.New("银行卡信息校验不通过")
+		}
 
-	var withdraw *models.WithdrawRequest
-
-	err = database.DB.Transaction(func(tx *gorm.DB) error {
 		requestNo := utils.GenerateWithdrawRequestNo()
 
-		withdraw = &models.WithdrawRequest{
+		withdraw := &models.WithdrawRequest{
 			RequestNo:     requestNo,
 			DistributorID: distributorID,
 			Amount:        amount,
@@ -73,13 +72,16 @@ func (s *WithdrawService) SubmitWithdraw(distributorID uint, amount int64) (*mod
 		}
 
 		return nil
-	})
-
-	if err != nil {
+	}); err != nil {
 		return nil, err
 	}
 
-	return withdraw, nil
+	var withdraw models.WithdrawRequest
+	if err := database.DB.Where("distributor_id = ?", distributorID).Order("created_at DESC").First(&withdraw).Error; err != nil {
+		return nil, err
+	}
+
+	return &withdraw, nil
 }
 
 func (s *WithdrawService) Approve(withdrawID uint, operatorID uint) error {
