@@ -3,21 +3,25 @@ package handler
 import (
 	"strconv"
 
+	"distribution-commission/internal/database"
 	"distribution-commission/internal/middleware"
 	"distribution-commission/internal/pkg/response"
+	"distribution-commission/internal/repository"
 	"distribution-commission/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
 
 type OrderHandler struct {
-	orderService     *service.OrderService
+	orderService       *service.OrderService
 	distributorService *service.DistributorService
 }
 
 func NewOrderHandler() *OrderHandler {
+	orderRepository := repository.NewGormOrderRepository(database.DB)
+
 	return &OrderHandler{
-		orderService:       service.NewOrderService(),
+		orderService:       service.NewOrderService(orderRepository),
 		distributorService: service.NewDistributorService(),
 	}
 }

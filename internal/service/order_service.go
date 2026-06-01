@@ -4,19 +4,21 @@ import (
 	"context"
 	"errors"
 
-	"distribution-commission/internal/database"
 	"distribution-commission/internal/models"
 	"distribution-commission/internal/pkg/utils"
+	"distribution-commission/internal/repository"
 
 	"gorm.io/gorm"
 )
 
 type OrderService struct {
+	orderRepository   repository.OrderRepository
 	idempotentService *IdempotentService
 }
 
-func NewOrderService() *OrderService {
+func NewOrderService(orderRepository repository.OrderRepository) *OrderService {
 	return &OrderService{
+		orderRepository:   orderRepository,
 		idempotentService: NewIdempotentService(),
 	}
 }
@@ -31,17 +33,17 @@ func (s *OrderService) CreateCompletedOrder(ctx context.Context, orderNo string,
 		return nil, err
 	}
 	if !locked {
-		var existingOrder models.Order
-		if err := database.DB.Where("order_no = ?", orderNo).First(&existingOrder).Error; err == nil {
-			return &existingOrder, nil
+		existingOrder, err := s.orderRepository.GetByOrderNo(orderNo)
+		if err == nil {
+			return existingOrder, nil
 		}
 		return nil, errors.New("订单正在处理中，请稍后重试")
 	}
 	defer s.idempotentService.ReleaseOrderLock(ctx, orderNo)
 
-	var existingOrder models.Order
-	if err := database.DB.Where("order_no = ?", orderNo).First(&existingOrder).Error; err == nil {
-		return &existingOrder, nil
+	existingOrder, err := s.orderRepository.GetByOrderNo(orderNo)
+	if err == nil {
+		return existingOrder, nil
 	} else if err != gorm.ErrRecordNotFound {
 		return nil, err
 	}
@@ -54,7 +56,7 @@ func (s *OrderService) CreateCompletedOrder(ctx context.Context, orderNo string,
 		Status:        models.OrderStatusCompleted,
 	}
 
-	if err := database.DB.Create(order).Error; err != nil {
+	if err := s.orderRepository.Create(order); err != nil {
 		return nil, err
 	}
 
@@ -62,36 +64,13 @@ func (s *OrderService) CreateCompletedOrder(ctx context.Context, orderNo string,
 }
 
 func (s *OrderService) GetByOrderNo(orderNo string) (*models.Order, error) {
-	var order models.Order
-	if err := database.DB.Where("order_no = ?", orderNo).Preload("Distributor").First(&order).Error; err != nil {
-		return nil, err
-	}
-	return &order, nil
+	return s.orderRepository.GetByOrderNo(orderNo)
 }
 
 func (s *OrderService) GetByID(id uint) (*models.Order, error) {
-	var order models.Order
-	if err := database.DB.Preload("Distributor").First(&order, id).Error; err != nil {
-		return nil, err
-	}
-	return &order, nil
+	return s.orderRepository.GetByID(id)
 }
 
 func (s *OrderService) ListByDistributor(distributorID uint, page, pageSize int) ([]models.Order, int64, error) {
-	var orders []models.Order
-	var total int64
-
-	offset := (page - 1) * pageSize
-
-	query := database.DB.Model(&models.Order{}).Where("distributor_id = ?", distributorID)
-
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	if err := query.Offset(offset).Limit(pageSize).Order("created_at DESC").Find(&orders).Error; err != nil {
-		return nil, 0, err
-	}
-
-	return orders, total, nil
+	return s.orderRepository.ListByDistributor(distributorID, page, pageSize)
 }
