@@ -30,10 +30,6 @@ func (s *WithdrawService) SubmitWithdraw(distributorID uint, amount int64) (*mod
 		return nil, err
 	}
 
-	if distributor.Balance < amount {
-		return nil, errors.New("余额不足")
-	}
-
 	if distributor.BankCardNo == "" || distributor.RealName == "" {
 		return nil, errors.New("请先完善银行卡信息")
 	}
@@ -49,6 +45,14 @@ func (s *WithdrawService) SubmitWithdraw(distributorID uint, amount int64) (*mod
 	var withdraw *models.WithdrawRequest
 
 	err = database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(gorm.Expr("FOR UPDATE")).First(&distributor, distributorID).Error; err != nil {
+			return err
+		}
+
+		if distributor.Balance < amount {
+			return errors.New("余额不足")
+		}
+
 		requestNo := utils.GenerateWithdrawRequestNo()
 
 		withdraw = &models.WithdrawRequest{
@@ -65,11 +69,15 @@ func (s *WithdrawService) SubmitWithdraw(distributorID uint, amount int64) (*mod
 			return err
 		}
 
-		if err := tx.Model(&models.Distributor{}).Where("id = ?", distributorID).Updates(map[string]interface{}{
+		result := tx.Model(&models.Distributor{}).Where("id = ? AND balance >= ?", distributorID, amount).Updates(map[string]interface{}{
 			"balance":        gorm.Expr("balance - ?", amount),
 			"frozen_balance": gorm.Expr("frozen_balance + ?", amount),
-		}).Error; err != nil {
-			return err
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errors.New("余额不足")
 		}
 
 		return nil
