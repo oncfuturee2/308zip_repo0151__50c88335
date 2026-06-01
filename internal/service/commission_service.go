@@ -149,3 +149,113 @@ func (s *CommissionService) ListByDistributor(distributorID uint, status string,
 
 	return commissions, total, nil
 }
+
+func (s *CommissionService) RollbackCommission(orderNo string, operatorID uint) error {
+	var commission models.CommissionRecord
+	if err := database.DB.Where("order_no = ?", orderNo).First(&commission).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil
+		}
+		return err
+	}
+
+	if commission.Status == models.CommissionStatusCancelled || commission.Status == models.CommissionStatusRefunded {
+		return nil
+	}
+
+	if commission.Status == models.CommissionStatusPending {
+		return database.DB.Transaction(func(tx *gorm.DB) error {
+			var currentCommission models.CommissionRecord
+			if err := tx.Where("order_no = ?", orderNo).First(&currentCommission).Error; err != nil {
+				return err
+			}
+
+			if currentCommission.Status != models.CommissionStatusPending {
+				return errors.New("佣金状态已变更，无法回滚")
+			}
+
+			now := time.Now()
+			if err := tx.Model(&currentCommission).Updates(map[string]interface{}{
+				"status":     models.CommissionStatusCancelled,
+				"updated_at": now,
+			}).Error; err != nil {
+				return err
+			}
+
+			auditLog := &models.AuditLog{
+				DistributorID: currentCommission.DistributorID,
+				OperatorID:    operatorID,
+				ResourceType:  "commission",
+				ResourceID:    currentCommission.ID,
+				Action:        "rollback",
+				OldStatus:     string(models.CommissionStatusPending),
+				NewStatus:     string(models.CommissionStatusCancelled),
+				ChangeReason:  "订单退款导致佣金回滚",
+			}
+			if err := tx.Create(auditLog).Error; err != nil {
+				return err
+			}
+
+			return nil
+		})
+	}
+
+	if commission.Status == models.CommissionStatusSettled {
+		return database.DB.Transaction(func(tx *gorm.DB) error {
+			var currentCommission models.CommissionRecord
+			if err := tx.Where("order_no = ?", orderNo).First(&currentCommission).Error; err != nil {
+				return err
+			}
+
+			if currentCommission.Status != models.CommissionStatusSettled {
+				return errors.New("佣金状态已变更，无法回滚")
+			}
+
+			var distributor models.Distributor
+			if err := tx.Set("gorm:query_option", "FOR UPDATE").First(&distributor, currentCommission.DistributorID).Error; err != nil {
+				return err
+			}
+
+			if distributor.Balance < currentCommission.Amount {
+				return errors.New("分销商可用余额不足，无法回滚佣金")
+			}
+
+			if distributor.TotalCommission < currentCommission.Amount {
+				return errors.New("分销商累计佣金不足，无法回滚佣金")
+			}
+
+			now := time.Now()
+			if err := tx.Model(&currentCommission).Updates(map[string]interface{}{
+				"status":     models.CommissionStatusRefunded,
+				"updated_at": now,
+			}).Error; err != nil {
+				return err
+			}
+
+			if err := tx.Model(&models.Distributor{}).Where("id = ?", currentCommission.DistributorID).Updates(map[string]interface{}{
+				"balance":          gorm.Expr("balance - ?", currentCommission.Amount),
+				"total_commission": gorm.Expr("total_commission - ?", currentCommission.Amount),
+			}).Error; err != nil {
+				return err
+			}
+
+			auditLog := &models.AuditLog{
+				DistributorID: currentCommission.DistributorID,
+				OperatorID:    operatorID,
+				ResourceType:  "commission",
+				ResourceID:    currentCommission.ID,
+				Action:        "rollback",
+				OldStatus:     string(models.CommissionStatusSettled),
+				NewStatus:     string(models.CommissionStatusRefunded),
+				ChangeReason:  "订单退款导致佣金回滚",
+			}
+			if err := tx.Create(auditLog).Error; err != nil {
+				return err
+			}
+
+			return nil
+		})
+	}
+
+	return errors.New("不支持的佣金状态，无法回滚")
+}

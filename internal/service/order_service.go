@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"time"
 
 	"distribution-commission/internal/database"
 	"distribution-commission/internal/models"
@@ -94,4 +95,44 @@ func (s *OrderService) ListByDistributor(distributorID uint, page, pageSize int)
 	}
 
 	return orders, total, nil
+}
+
+func (s *OrderService) RefundOrder(ctx context.Context, orderNo string, operatorID uint) (*models.Order, error) {
+	if orderNo == "" {
+		return nil, errors.New("订单号不能为空")
+	}
+
+	locked, err := s.idempotentService.AcquireRefundLock(ctx, orderNo)
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		return nil, errors.New("订单退款处理中，请稍后重试")
+	}
+	defer s.idempotentService.ReleaseRefundLock(ctx, orderNo)
+
+	var order models.Order
+	if err := database.DB.Where("order_no = ?", orderNo).First(&order).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, errors.New("订单不存在")
+		}
+		return nil, err
+	}
+
+	if order.Status != models.OrderStatusCompleted {
+		return nil, errors.New("只有已完成的订单可以退款")
+	}
+
+	now := time.Now()
+	if err := database.DB.Model(&order).Updates(map[string]interface{}{
+		"status": models.OrderStatusRefunded,
+		"updated_at": now,
+	}).Error; err != nil {
+		return nil, err
+	}
+
+	order.Status = models.OrderStatusRefunded
+	order.UpdatedAt = now
+
+	return &order, nil
 }
