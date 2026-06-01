@@ -18,13 +18,46 @@ func SetupTestDB() {
 		log.Fatalf("Failed to connect to test database: %v", err)
 	}
 
-	err = DB.AutoMigrate(&models.User{}, &models.Distributor{})
+	sqlDB, err := DB.DB()
+	if err != nil {
+		log.Fatalf("Failed to get underlying test database: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+
+	if err := DB.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+		log.Fatalf("Failed to enable SQLite foreign keys: %v", err)
+	}
+
+	err = DB.AutoMigrate(
+		&models.User{},
+		&models.Distributor{},
+		&models.Order{},
+		&models.CommissionRecord{},
+		&models.WithdrawRequest{},
+		&models.AuditLog{},
+	)
 	if err != nil {
 		log.Fatalf("Failed to migrate test database: %v", err)
 	}
 }
 
 func CleanupTestDB() {
-	DB.Exec("DELETE FROM distributors")
-	DB.Exec("DELETE FROM users")
+	if DB == nil {
+		return
+	}
+
+	db := DB.Session(&gorm.Session{AllowGlobalUpdate: true})
+	db.Unscoped().Delete(&models.AuditLog{})
+	db.Unscoped().Delete(&models.WithdrawRequest{})
+	db.Unscoped().Delete(&models.CommissionRecord{})
+	db.Unscoped().Delete(&models.Order{})
+	db.Unscoped().Delete(&models.Distributor{})
+	db.Unscoped().Delete(&models.User{})
+
+	sqlDB, err := DB.DB()
+	if err == nil {
+		_ = sqlDB.Close()
+	}
+	DB = nil
 }
