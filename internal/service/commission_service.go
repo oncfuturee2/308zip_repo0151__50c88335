@@ -17,15 +17,15 @@ type CommissionService struct {
 	orderService      *OrderService
 }
 
-func NewCommissionService() *CommissionService {
+func NewCommissionService(orderService *OrderService) *CommissionService {
 	return &CommissionService{
 		idempotentService: NewIdempotentService(),
-		orderService:      NewOrderService(),
+		orderService:      orderService,
 	}
 }
 
 func (s *CommissionService) GenerateCommission(ctx context.Context, orderNo string) (*models.CommissionRecord, error) {
-	order, err := s.orderService.GetByOrderNo(orderNo)
+	order, err := s.orderService.GetByOrderNo(ctx, orderNo)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, errors.New("订单不存在")

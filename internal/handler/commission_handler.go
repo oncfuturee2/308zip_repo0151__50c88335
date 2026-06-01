@@ -15,9 +15,9 @@ type CommissionHandler struct {
 	distributorService *service.DistributorService
 }
 
-func NewCommissionHandler() *CommissionHandler {
+func NewCommissionHandler(commissionService *service.CommissionService) *CommissionHandler {
 	return &CommissionHandler{
-		commissionService:  service.NewCommissionService(),
+		commissionService:  commissionService,
 		distributorService: service.NewDistributorService(),
 	}
 }

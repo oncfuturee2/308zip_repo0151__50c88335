@@ -1,8 +1,11 @@
 package router
 
 import (
+	"distribution-commission/internal/database"
 	"distribution-commission/internal/handler"
 	"distribution-commission/internal/middleware"
+	"distribution-commission/internal/repository"
+	"distribution-commission/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -10,9 +13,13 @@ import (
 func SetupRouter() *gin.Engine {
 	r := gin.Default()
 
+	orderRepo := repository.NewGormOrderRepository(database.DB)
+	orderService := service.NewOrderService(orderRepo)
+	commissionService := service.NewCommissionService(orderService)
+
 	authHandler := handler.NewAuthHandler()
-	orderHandler := handler.NewOrderHandler()
-	commissionHandler := handler.NewCommissionHandler()
+	orderHandler := handler.NewOrderHandler(orderRepo)
+	commissionHandler := handler.NewCommissionHandler(commissionService)
 	withdrawHandler := handler.NewWithdrawHandler()
 	auditLogHandler := handler.NewAuditLogHandler()
 

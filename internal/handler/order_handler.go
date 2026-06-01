@@ -5,19 +5,20 @@ import (
 
 	"distribution-commission/internal/middleware"
 	"distribution-commission/internal/pkg/response"
+	"distribution-commission/internal/repository"
 	"distribution-commission/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
 
 type OrderHandler struct {
-	orderService     *service.OrderService
+	orderService       *service.OrderService
 	distributorService *service.DistributorService
 }
 
-func NewOrderHandler() *OrderHandler {
+func NewOrderHandler(orderRepo repository.OrderRepository) *OrderHandler {
 	return &OrderHandler{
-		orderService:       service.NewOrderService(),
+		orderService:       service.NewOrderService(orderRepo),
 		distributorService: service.NewDistributorService(),
 	}
 }
@@ -71,7 +72,7 @@ func (h *OrderHandler) GetOrderList(c *gin.Context) {
 		pageSize = 10
 	}
 
-	orders, total, err := h.orderService.ListByDistributor(distributor.ID, page, pageSize)
+	orders, total, err := h.orderService.ListByDistributor(c.Request.Context(), distributor.ID, page, pageSize)
 	if err != nil {
 		response.InternalError(c, "查询订单列表失败: "+err.Error())
 		return
