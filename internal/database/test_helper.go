@@ -18,13 +18,20 @@ func SetupTestDB() {
 		log.Fatalf("Failed to connect to test database: %v", err)
 	}
 
-	err = DB.AutoMigrate(&models.User{}, &models.Distributor{})
+	err = DB.AutoMigrate(
+		&models.User{},
+		&models.Distributor{},
+		&models.Order{},
+		&models.CommissionRecord{},
+	)
 	if err != nil {
 		log.Fatalf("Failed to migrate test database: %v", err)
 	}
 }
 
 func CleanupTestDB() {
+	DB.Exec("DELETE FROM commission_records")
+	DB.Exec("DELETE FROM orders")
 	DB.Exec("DELETE FROM distributors")
 	DB.Exec("DELETE FROM users")
 }

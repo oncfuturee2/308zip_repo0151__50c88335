@@ -55,6 +55,7 @@ type CreateDistributorRequest struct {
 	Phone      string `json:"phone"`
 	BankCardNo string `json:"bank_card_no"`
 	BankName   string `json:"bank_name"`
+	ParentID   *uint  `json:"parent_id"`
 }
 
 func (h *AuthHandler) CreateDistributor(c *gin.Context) {
@@ -71,7 +72,7 @@ func (h *AuthHandler) CreateDistributor(c *gin.Context) {
 	}
 
 	distributorService := service.NewDistributorService()
-	distributor, err := distributorService.CreateDistributor(user.ID, req.RealName, req.Phone, req.BankCardNo, req.BankName)
+	distributor, err := distributorService.CreateDistributor(user.ID, req.RealName, req.Phone, req.BankCardNo, req.BankName, req.ParentID)
 	if err != nil {
 		response.InternalError(c, "创建分销员失败: "+err.Error())
 		return

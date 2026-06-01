@@ -24,7 +24,7 @@ func NewCommissionService() *CommissionService {
 	}
 }
 
-func (s *CommissionService) GenerateCommission(ctx context.Context, orderNo string) (*models.CommissionRecord, error) {
+func (s *CommissionService) GenerateCommission(ctx context.Context, orderNo string) ([]models.CommissionRecord, error) {
 	order, err := s.orderService.GetByOrderNo(orderNo)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -42,38 +42,82 @@ func (s *CommissionService) GenerateCommission(ctx context.Context, orderNo stri
 		return nil, err
 	}
 	if !locked {
-		var existingCommission models.CommissionRecord
-		if err := database.DB.Where("order_no = ?", orderNo).First(&existingCommission).Error; err == nil {
-			return &existingCommission, nil
+		var existingCommissions []models.CommissionRecord
+		if err := database.DB.Where("order_no = ?", orderNo).Find(&existingCommissions).Error; err == nil && len(existingCommissions) > 0 {
+			return existingCommissions, nil
 		}
 		return nil, errors.New("佣金正在生成中，请稍后重试")
 	}
 	defer s.idempotentService.ReleaseCommissionLock(ctx, orderNo)
 
-	var existingCommission models.CommissionRecord
-	if err := database.DB.Where("order_no = ?", orderNo).First(&existingCommission).Error; err == nil {
-		return &existingCommission, nil
-	} else if err != gorm.ErrRecordNotFound {
+	var existingCommissions []models.CommissionRecord
+	if err := database.DB.Where("order_no = ?", orderNo).Find(&existingCommissions).Error; err == nil && len(existingCommissions) > 0 {
+		return existingCommissions, nil
+	} else if err != nil && err != gorm.ErrRecordNotFound {
 		return nil, err
 	}
 
-	rate := config.AppConfig.CommissionRate
-	amount := int64(float64(order.Amount) * float64(rate) / 100.0)
+	var commissions []models.CommissionRecord
+	err = database.DB.Transaction(func(tx *gorm.DB) error {
+		currentDistributorID := order.DistributorID
+		rates := []int{
+			config.AppConfig.CommissionRateLevel1,
+			config.AppConfig.CommissionRateLevel2,
+			config.AppConfig.CommissionRateLevel3,
+		}
 
-	commission := &models.CommissionRecord{
-		OrderNo:       orderNo,
-		DistributorID: order.DistributorID,
-		OrderAmount:   order.Amount,
-		Rate:          rate,
-		Amount:        amount,
-		Status:        models.CommissionStatusPending,
-	}
+		for level := 1; level <= 3; level++ {
+			if currentDistributorID == 0 {
+				break
+			}
 
-	if err := database.DB.Create(commission).Error; err != nil {
+			var distributor models.Distributor
+			if err := tx.First(&distributor, currentDistributorID).Error; err != nil {
+				if err == gorm.ErrRecordNotFound {
+					break
+				}
+				return err
+			}
+
+			if distributor.Status != 1 {
+				currentDistributorID = 0
+				continue
+			}
+
+			rate := rates[level-1]
+			amount := int64(float64(order.Amount) * float64(rate) / 100.0)
+
+			commission := models.CommissionRecord{
+				OrderNo:       orderNo,
+				DistributorID: currentDistributorID,
+				Level:         level,
+				OrderAmount:   order.Amount,
+				Rate:          rate,
+				Amount:        amount,
+				Status:        models.CommissionStatusPending,
+			}
+
+			if err := tx.Create(&commission).Error; err != nil {
+				return err
+			}
+
+			commissions = append(commissions, commission)
+
+			if distributor.ParentID != nil {
+				currentDistributorID = *distributor.ParentID
+			} else {
+				currentDistributorID = 0
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
 		return nil, err
 	}
 
-	return commission, nil
+	return commissions, nil
 }
 
 func (s *CommissionService) SettleCommission(commissionID uint, operatorID uint) error {
@@ -125,6 +169,14 @@ func (s *CommissionService) GetByID(id uint) (*models.CommissionRecord, error) {
 		return nil, err
 	}
 	return &commission, nil
+}
+
+func (s *CommissionService) ListByOrderNo(orderNo string) ([]models.CommissionRecord, error) {
+	var commissions []models.CommissionRecord
+	if err := database.DB.Preload("Distributor").Where("order_no = ?", orderNo).Find(&commissions).Error; err != nil {
+		return nil, err
+	}
+	return commissions, nil
 }
 
 func (s *CommissionService) ListByDistributor(distributorID uint, status string, page, pageSize int) ([]models.CommissionRecord, int64, error) {
