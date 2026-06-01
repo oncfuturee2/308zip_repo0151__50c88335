@@ -149,3 +149,65 @@ func (s *CommissionService) ListByDistributor(distributorID uint, status string,
 
 	return commissions, total, nil
 }
+
+func (s *CommissionService) RollbackCommission(ctx context.Context, orderNo string, operatorID uint) error {
+	var commission models.CommissionRecord
+	if err := database.DB.Where("order_no = ?", orderNo).First(&commission).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil
+		}
+		return err
+	}
+
+	if commission.Status == models.CommissionStatusRefunded {
+		return nil
+	}
+
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		oldStatus := string(commission.Status)
+
+		if commission.Status == models.CommissionStatusPending {
+			commission.Status = models.CommissionStatusCancelled
+		} else if commission.Status == models.CommissionStatusSettled {
+			commission.Status = models.CommissionStatusRefunded
+
+			var distributor models.Distributor
+			if err := tx.First(&distributor, commission.DistributorID).Error; err != nil {
+				return err
+			}
+
+			if distributor.Balance < commission.Amount {
+				return errors.New("分销员余额不足，无法扣除退款")
+			}
+
+			if err := tx.Model(&models.Distributor{}).Where("id = ?", commission.DistributorID).Updates(map[string]interface{}{
+				"balance":          gorm.Expr("balance - ?", commission.Amount),
+				"total_commission": gorm.Expr("total_commission - ?", commission.Amount),
+			}).Error; err != nil {
+				return err
+			}
+		} else {
+			return errors.New("当前佣金状态不允许退款")
+		}
+
+		if err := tx.Save(&commission).Error; err != nil {
+			return err
+		}
+
+		auditLog := &models.AuditLog{
+			DistributorID: commission.DistributorID,
+			OperatorID:    operatorID,
+			ResourceType:  "commission",
+			ResourceID:    commission.ID,
+			Action:        "refund",
+			OldStatus:     oldStatus,
+			NewStatus:     string(commission.Status),
+			ChangeReason:  "订单退款",
+		}
+		if err := tx.Create(auditLog).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+}

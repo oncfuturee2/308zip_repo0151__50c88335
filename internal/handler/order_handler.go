@@ -28,6 +28,10 @@ type CreateOrderRequest struct {
 	GoodsName string `json:"goods_name"`
 }
 
+type RefundOrderRequest struct {
+	OrderNo string `json:"order_no" binding:"required"`
+}
+
 func (h *OrderHandler) CreateCompletedOrder(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 
@@ -83,4 +87,21 @@ func (h *OrderHandler) GetOrderList(c *gin.Context) {
 		"page":      page,
 		"page_size": pageSize,
 	})
+}
+
+func (h *OrderHandler) RefundOrder(c *gin.Context) {
+	var req RefundOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+
+	operatorID := middleware.GetUserID(c)
+
+	if err := h.orderService.RefundOrder(c.Request.Context(), req.OrderNo, operatorID); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	response.SuccessWithMessage(c, "订单退款成功", nil)
 }
