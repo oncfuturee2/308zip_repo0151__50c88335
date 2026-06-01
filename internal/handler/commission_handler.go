@@ -5,9 +5,11 @@ import (
 
 	"distribution-commission/internal/middleware"
 	"distribution-commission/internal/pkg/response"
+	"distribution-commission/internal/repository"
 	"distribution-commission/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type CommissionHandler struct {
@@ -15,9 +17,10 @@ type CommissionHandler struct {
 	distributorService *service.DistributorService
 }
 
-func NewCommissionHandler() *CommissionHandler {
+func NewCommissionHandler(db *gorm.DB) *CommissionHandler {
+	orderRepo := repository.NewGormOrderRepository(db)
 	return &CommissionHandler{
-		commissionService:  service.NewCommissionService(),
+		commissionService:  service.NewCommissionService(orderRepo),
 		distributorService: service.NewDistributorService(),
 	}
 }

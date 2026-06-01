@@ -1,6 +1,7 @@
 package router
 
 import (
+	"distribution-commission/internal/database"
 	"distribution-commission/internal/handler"
 	"distribution-commission/internal/middleware"
 
@@ -11,8 +12,8 @@ func SetupRouter() *gin.Engine {
 	r := gin.Default()
 
 	authHandler := handler.NewAuthHandler()
-	orderHandler := handler.NewOrderHandler()
-	commissionHandler := handler.NewCommissionHandler()
+	orderHandler := handler.NewOrderHandler(database.DB)
+	commissionHandler := handler.NewCommissionHandler(database.DB)
 	withdrawHandler := handler.NewWithdrawHandler()
 	auditLogHandler := handler.NewAuditLogHandler()
 
