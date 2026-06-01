@@ -61,6 +61,40 @@ func (s *OrderService) CreateCompletedOrder(ctx context.Context, orderNo string,
 	return order, nil
 }
 
+func (s *OrderService) RefundOrder(ctx context.Context, orderNo string) error {
+	locked, err := s.idempotentService.AcquireOrderRefundLock(ctx, orderNo)
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return errors.New("订单退款正在处理中，请稍后重试")
+	}
+	defer s.idempotentService.ReleaseOrderRefundLock(ctx, orderNo)
+
+	var order models.Order
+	if err := database.DB.Where("order_no = ?", orderNo).First(&order).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return errors.New("订单不存在")
+		}
+		return err
+	}
+
+	if order.Status == models.OrderStatusRefunded {
+		return nil
+	}
+
+	if order.Status != models.OrderStatusCompleted {
+		return errors.New("只能退款已完成的订单")
+	}
+
+	order.Status = models.OrderStatusRefunded
+	if err := database.DB.Save(&order).Error; err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (s *OrderService) GetByOrderNo(orderNo string) (*models.Order, error) {
 	var order models.Order
 	if err := database.DB.Where("order_no = ?", orderNo).Preload("Distributor").First(&order).Error; err != nil {

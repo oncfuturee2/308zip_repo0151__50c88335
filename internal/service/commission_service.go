@@ -119,6 +119,81 @@ func (s *CommissionService) SettleCommission(commissionID uint, operatorID uint)
 	})
 }
 
+func (s *CommissionService) RollbackCommission(ctx context.Context, orderNo string, operatorID uint) error {
+	// First, try to find the commission record
+	var commission models.CommissionRecord
+	if err := database.DB.Where("order_no = ?", orderNo).First(&commission).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			// No commission generated yet, nothing to rollback
+			return nil
+		}
+		return err
+	}
+
+	if commission.Status == models.CommissionStatusCancelled || commission.Status == models.CommissionStatusRefunded {
+		// Already rolled back
+		return nil
+	}
+
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		// Lock the commission record for update
+		if err := tx.Where("id = ?", commission.ID).Set("gorm:query_option", "FOR UPDATE").First(&commission).Error; err != nil {
+			return err
+		}
+
+		if commission.Status == models.CommissionStatusCancelled || commission.Status == models.CommissionStatusRefunded {
+			return nil
+		}
+
+		oldStatus := string(commission.Status)
+		var newStatus string
+
+		if commission.Status == models.CommissionStatusPending {
+			newStatus = string(models.CommissionStatusCancelled)
+			commission.Status = models.CommissionStatusCancelled
+			if err := tx.Save(&commission).Error; err != nil {
+				return err
+			}
+		} else if commission.Status == models.CommissionStatusSettled {
+			newStatus = string(models.CommissionStatusRefunded)
+			commission.Status = models.CommissionStatusRefunded
+			if err := tx.Save(&commission).Error; err != nil {
+				return err
+			}
+
+			// Deduct balance and total_commission from distributor
+			result := tx.Model(&models.Distributor{}).Where("id = ? AND balance >= ?", commission.DistributorID, commission.Amount).Updates(map[string]interface{}{
+				"balance":          gorm.Expr("balance - ?", commission.Amount),
+				"total_commission": gorm.Expr("total_commission - ?", commission.Amount),
+			})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return errors.New("分销员余额不足以扣除佣金")
+			}
+		} else {
+			return errors.New("未知佣金状态无法回滚")
+		}
+
+		auditLog := &models.AuditLog{
+			DistributorID: commission.DistributorID,
+			OperatorID:    operatorID,
+			ResourceType:  "commission",
+			ResourceID:    commission.ID,
+			Action:        "rollback",
+			OldStatus:     oldStatus,
+			NewStatus:     newStatus,
+			ChangeReason:  "订单退款，佣金回滚",
+		}
+		if err := tx.Create(auditLog).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
 func (s *CommissionService) GetByID(id uint) (*models.CommissionRecord, error) {
 	var commission models.CommissionRecord
 	if err := database.DB.Preload("Distributor").First(&commission, id).Error; err != nil {

@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	IdempotentKeyPrefixOrder      = "idempotent:order"
-	IdempotentKeyPrefixCommission = "idempotent:commission"
-	IdempotentKeyTTL              = 24 * time.Hour
+	IdempotentKeyPrefixOrder       = "idempotent:order"
+	IdempotentKeyPrefixOrderRefund = "idempotent:order:refund"
+	IdempotentKeyPrefixCommission  = "idempotent:commission"
+	IdempotentKeyTTL               = 24 * time.Hour
 )
 
 type IdempotentService struct{}
@@ -31,6 +32,16 @@ func (s *IdempotentService) AcquireOrderLock(ctx context.Context, orderNo string
 
 func (s *IdempotentService) ReleaseOrderLock(ctx context.Context, orderNo string) error {
 	key := s.buildKey(IdempotentKeyPrefixOrder, orderNo)
+	return s.releaseLock(ctx, key)
+}
+
+func (s *IdempotentService) AcquireOrderRefundLock(ctx context.Context, orderNo string) (bool, error) {
+	key := s.buildKey(IdempotentKeyPrefixOrderRefund, orderNo)
+	return s.acquireLock(ctx, key)
+}
+
+func (s *IdempotentService) ReleaseOrderRefundLock(ctx context.Context, orderNo string) error {
+	key := s.buildKey(IdempotentKeyPrefixOrderRefund, orderNo)
 	return s.releaseLock(ctx, key)
 }
 

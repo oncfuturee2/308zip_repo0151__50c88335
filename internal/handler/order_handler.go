@@ -11,14 +11,16 @@ import (
 )
 
 type OrderHandler struct {
-	orderService     *service.OrderService
+	orderService       *service.OrderService
 	distributorService *service.DistributorService
+	commissionService  *service.CommissionService
 }
 
 func NewOrderHandler() *OrderHandler {
 	return &OrderHandler{
 		orderService:       service.NewOrderService(),
 		distributorService: service.NewDistributorService(),
+		commissionService:  service.NewCommissionService(),
 	}
 }
 
@@ -50,6 +52,38 @@ func (h *OrderHandler) CreateCompletedOrder(c *gin.Context) {
 	}
 
 	response.Success(c, order)
+}
+
+type RefundOrderRequest struct {
+	OrderNo string `json:"order_no" binding:"required"`
+}
+
+func (h *OrderHandler) RefundOrder(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+
+	var req RefundOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// 1. Refund the order
+	if err := h.orderService.RefundOrder(ctx, req.OrderNo); err != nil {
+		response.BadRequest(c, "订单退款失败: "+err.Error())
+		return
+	}
+
+	// 2. Rollback the commission
+	if err := h.commissionService.RollbackCommission(ctx, req.OrderNo, userID); err != nil {
+		response.BadRequest(c, "佣金回滚失败: "+err.Error())
+		return
+	}
+
+	response.Success(c, gin.H{
+		"message": "订单退款及佣金回滚成功",
+	})
 }
 
 func (h *OrderHandler) GetOrderList(c *gin.Context) {
